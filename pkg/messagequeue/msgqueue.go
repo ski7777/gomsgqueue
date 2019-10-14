@@ -14,15 +14,17 @@ import (
 const TIMEOUT = 1 * time.Minute
 
 type MessageQueue struct {
-	sendstack    chan *structs.Message
-	callbacks    map[string]*structs.ResponseWait
-	callbacklock sync.Mutex
-	timeout      int64
-	dh           etypes.MessageHandler
-	dhlock       sync.Mutex
-	stopthreads  bool
-	threadwait   sync.WaitGroup
-	mqdh         types.MQDataHandler
+	sendstack        chan *structs.Message
+	callbacks        map[string]*structs.ResponseWait
+	callbacklock     sync.Mutex
+	timeout          int64
+	dh               etypes.MessageHandler
+	dhlock           sync.Mutex
+	stopthreads      bool
+	threadwait       sync.WaitGroup
+	mqdh             types.MQDataHandler
+	datahandlers     map[string]types.MQDataHandler
+	datahandlerslock sync.Mutex
 }
 
 func (mq *MessageQueue) SendMessage(p interface{}, pt string) (string, error) {
@@ -103,6 +105,18 @@ func (mq *MessageQueue) Stop() {
 	mq.stopthreads = true
 }
 
+func (mq *MessageQueue) RegisterDataHandler(t string, dh types.MQDataHandler) {
+	mq.datahandlerslock.Lock()
+	defer mq.datahandlerslock.Unlock()
+	mq.datahandlers[t] = dh
+}
+
+func (mq *MessageQueue) UnregisterDataHandler(t string) {
+	mq.datahandlerslock.Lock()
+	defer mq.datahandlerslock.Unlock()
+	delete(mq.datahandlers, t)
+}
+
 func (mq *MessageQueue) handleMessage(msg *structs.Message) {
 	if msg.MqControl {
 		if msg.PayloadType == "KeepAlive" {
@@ -116,9 +130,15 @@ func (mq *MessageQueue) handleMessage(msg *structs.Message) {
 	} else {
 		mq.callbacklock.Lock()
 		defer mq.callbacklock.Unlock()
+		mq.datahandlerslock.Lock()
+		defer mq.datahandlerslock.Unlock()
 		if cb, ok := mq.callbacks[msg.ID]; ok {
 			go cb.ResponseHandler(msg.Payload, msg.PayloadType)
 			delete(mq.callbacks, msg.ID)
+			return
+		}
+		if dh, ok := mq.datahandlers[msg.PayloadType]; ok {
+			go dh(msg.ID, msg.PayloadType, msg.Payload, msg.AwaitingResponse)
 			return
 		}
 		if mq.mqdh != nil {
@@ -153,6 +173,7 @@ func NewMessageQueue() *MessageQueue {
 	mq := new(MessageQueue)
 	mq.sendstack = make(chan *structs.Message)
 	mq.callbacks = make(map[string]*structs.ResponseWait)
+	mq.datahandlers = make(map[string]types.MQDataHandler)
 	mq.timeout = TIMEOUT.Nanoseconds()
 	return mq
 }
