@@ -68,8 +68,8 @@ func (mq *MessageQueue) SetDataHandler(dh types.MQDataHandler) {
 }
 
 func (mq *MessageQueue) Run() {
+	mq.threadwait.Add(1)
 	go func() {
-		mq.threadwait.Add(1)
 		defer mq.threadwait.Done()
 		lastcheck := time.Now().Unix()
 		for !mq.stopthreads {
@@ -103,6 +103,8 @@ func (mq *MessageQueue) Run() {
 
 func (mq *MessageQueue) Stop() {
 	mq.stopthreads = true
+	close(mq.sendstack)
+	mq.threadwait.Wait()
 }
 
 func (mq *MessageQueue) RegisterDataHandler(t string, dh types.MQDataHandler) {
